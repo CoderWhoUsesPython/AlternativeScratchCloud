@@ -2,6 +2,19 @@
 (function() {
   const SERVER_URL = 'http://localhost:3000'; // Your local Flask server
   
+  // Extract projectID from Scratch URL
+  let projectID;
+  try {
+    const url = window.location.href;
+    const match = url.match(/scratch\.mit\.edu\/projects\/(\d+)/);
+    if (!match || !match[1]) throw new Error('Could not extract projectID from URL');
+    projectID = match[1];
+    console.log(`[CloudVars] Detected projectID: ${projectID}`);
+  } catch (error) {
+    console.error('[CloudVars] Failed to extract projectID:', error);
+    return;
+  }
+  
   // Get Scratch VM
   let vm;
   try {
@@ -47,15 +60,15 @@
           headers: {
             'Content-Type': 'application/json'
           },
-          body: JSON.stringify({ name, value, timestamp: lastValues[name].timestamp })
+          body: JSON.stringify({ projectID, name, value, timestamp: lastValues[name].timestamp })
         });
         
         const data = await response.json();
         if (data.success) {
           lastValues[name] = { value: data.newValue, timestamp: data.timestamp };
-          console.log(`[CloudVars] Initialized server with ${name}: ${data.newValue} (timestamp: ${data.timestamp})`);
+          console.log(`[CloudVars] Initialized server with ${projectID}/${name}: ${data.newValue} (timestamp: ${data.timestamp})`);
         } else if (data.error.includes('newer value')) {
-          console.log(`[CloudVars] Server has newer value for ${name}: ${data.serverValue}`);
+          console.log(`[CloudVars] Server has newer value for ${projectID}/${name}: ${data.serverValue}`);
           const cloudVar = cloudVars.find(v => v.name === name);
           if (cloudVar) {
             vm.setVariableValue(stage.id, cloudVar.id, data.serverValue);
@@ -64,7 +77,7 @@
         }
       }
     } catch (error) {
-      console.error('[CloudVars] Failed to initialize to server:', error);
+      console.error(`[CloudVars] Failed to initialize to server for project ${projectID}:`, error);
     }
     isInitialized = true;
   }
@@ -77,15 +90,15 @@
         headers: {
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ name, value, timestamp })
+        body: JSON.stringify({ projectID, name, value, timestamp })
       });
       
       const data = await response.json();
       if (data.success) {
         lastValues[name] = { value: data.newValue, timestamp: data.timestamp };
-        console.log(`[CloudVars] Sent to server: ${name} = ${value} (timestamp: ${data.timestamp})`);
+        console.log(`[CloudVars] Sent to server: ${projectID}/${name} = ${value} (timestamp: ${data.timestamp})`);
       } else if (data.error.includes('newer value')) {
-        console.log(`[CloudVars] Update rejected for ${name}, fetching server value: ${data.serverValue}`);
+        console.log(`[CloudVars] Update rejected for ${projectID}/${name}, fetching server value: ${data.serverValue}`);
         const cloudVar = getCloudVariables().find(v => v.name === name);
         if (cloudVar) {
           vm.setVariableValue(stage.id, cloudVar.id, data.serverValue);
@@ -93,7 +106,7 @@
         }
       }
     } catch (error) {
-      console.error(`[CloudVars] Failed to send ${name} to server:`, error);
+      console.error(`[CloudVars] Failed to send ${projectID}/${name} to server:`, error);
     }
   }
   
@@ -101,13 +114,13 @@
   async function pollServerForUpdates() {
     if (!isInitialized) return;
     try {
-      const response = await fetch(`${SERVER_URL}/api/cloud/all`);
+      const response = await fetch(`${SERVER_URL}/api/cloud/all?projectID=${projectID}`);
       const data = await response.json();
       
       if (data.success) {
         for (const [name, { value, timestamp }] of Object.entries(data.variables)) {
           if (lastValues[name] && value !== lastValues[name].value && timestamp > lastValues[name].timestamp) {
-            console.log(`[CloudVars] Server ${name} changed: ${lastValues[name].value} -> ${value} (timestamp: ${timestamp})`);
+            console.log(`[CloudVars] Server ${projectID}/${name} changed: ${lastValues[name].value} -> ${value} (timestamp: ${timestamp})`);
             const cloudVar = getCloudVariables().find(v => v.name === name);
             if (cloudVar) {
               vm.setVariableValue(stage.id, cloudVar.id, value);
@@ -117,7 +130,7 @@
         }
       }
     } catch (error) {
-      console.error('[CloudVars] Failed to poll server:', error);
+      console.error(`[CloudVars] Failed to poll server for project ${projectID}:`, error);
     }
   }
   
@@ -134,11 +147,11 @@
         // New cloud variable detected
         lastValues[name] = { value, timestamp: 0 };
         if (isInitialized) {
-          console.log(`[CloudVars] New cloud variable detected: ${name} = ${value}`);
+          console.log(`[CloudVars] New cloud variable detected: ${projectID}/${name} = ${value}`);
           sendToServer(name, value, lastValues[name].timestamp);
         }
       } else if (isInitialized && value !== lastValues[name].value) {
-        console.log(`[CloudVars] ${name} changed locally: ${lastValues[name].value} -> ${value}`);
+        console.log(`[CloudVars] ${projectID}/${name} changed locally: ${lastValues[name].value} -> ${value}`);
         sendToServer(name, value, lastValues[name].timestamp);
         lastValues[name].value = value; // Update locally immediately
       }
@@ -146,7 +159,7 @@
   }
   
   // Start the system
-  console.log('[CloudVars] Starting cloud variables system...');
+  console.log(`[CloudVars] Starting cloud variables system for project ${projectID}...`);
   initializeFromServer();
   
   // Monitor local changes every 500ms
@@ -162,5 +175,5 @@
     console.log('[CloudVars] Stopped monitoring');
   };
   
-  console.log('[CloudVars] Cloud variables active! Call cloudVarsStop() to stop.');
+  console.log(`[CloudVars] Cloud variables active for project ${projectID}! Call cloudVarsStop() to stop.`);
 })();
