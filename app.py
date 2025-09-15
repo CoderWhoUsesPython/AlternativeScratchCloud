@@ -183,5 +183,14 @@ if __name__ == '__main__':
     print(f"📡 Cloud API: http://localhost:{port}/api/cloud")
     print(f"📡 All Cloud Variables: http://localhost:{port}/api/cloud/all?projectID=<id>")
     print(f"❤️ Health check: http://localhost:{port}/health")
+    print("🚀 Production mode - multi-threaded Flask server")
     
-    app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
+    # Force production mode with optimized settings
+    app.run(
+        host='0.0.0.0', 
+        port=port, 
+        debug=False, 
+        threaded=True,
+        use_reloader=False,
+        use_debugger=False
+    )
