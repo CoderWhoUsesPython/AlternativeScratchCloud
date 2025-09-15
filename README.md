@@ -17,4 +17,4 @@ pip install -r requirements.txt
 python app.py
 ```
 
-### 3. Invoke the JavaScript script while on a Scratch project. Make sure to change the SERVER_URL variable to your server domain like localhost if you are not using the default.
+### 3. Invoke the JavaScript script while on a Scratch project. Make sure to change the SERVER_URL variable to your server domain like http://localhost:3000 if you are not using the default.
