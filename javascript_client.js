@@ -1,6 +1,6 @@
-// Cloud Variables Bookmarklet Client
+// Cloud Variables Bookmarklet Client - FIXED VERSION
 (function() {
-  const SERVER_URL = 'https://alternativescratchcloud-production.up.railway.app'; // Your local Flask server
+  const SERVER_URL = 'https://alternativescratchcloud-production.up.railway.app';
   
   // Extract projectID from Scratch URL
   let projectID;
@@ -47,14 +47,36 @@
     return;
   }
   
-  // Track last known values
+  // Track last known values and pending updates
   let lastValues = Object.fromEntries(cloudVars.map(v => [v.name, { value: v.value }]));
+  let pendingUpdates = new Set(); // Track variables currently being updated
   let isInitialized = false;
+  let updateQueue = new Map(); // Queue updates to prevent spam
+  
+  // Debounced update function
+  function debounceUpdate(name, value) {
+    // Clear existing timeout for this variable
+    if (updateQueue.has(name)) {
+      clearTimeout(updateQueue.get(name).timeout);
+    }
+    
+    // Set new timeout
+    const timeout = setTimeout(() => {
+      if (!pendingUpdates.has(name)) {
+        sendToServer(name, value);
+      }
+      updateQueue.delete(name);
+    }, 100); // 100ms debounce
+    
+    updateQueue.set(name, { value, timeout });
+  }
   
   // Initialize by sending Scratch's cloud variables to server
   async function initializeFromServer() {
     try {
       for (const { name, value } of cloudVars) {
+        pendingUpdates.add(name);
+        
         const response = await fetch(`${SERVER_URL}/api/cloud`, {
           method: 'POST',
           headers: {
@@ -75,28 +97,43 @@
             lastValues[name] = { value: data.serverValue };
           }
         }
+        
+        pendingUpdates.delete(name);
       }
     } catch (error) {
       console.error(`[CloudVars] Failed to initialize to server for project ${projectID}:`, error);
+      // Clear all pending updates on error
+      pendingUpdates.clear();
     }
     isInitialized = true;
   }
   
   // Send value to server
   async function sendToServer(name, value) {
+    // Prevent concurrent updates to same variable
+    if (pendingUpdates.has(name)) {
+      console.log(`[CloudVars] Skipping ${name} - update already in progress`);
+      return;
+    }
+    
+    pendingUpdates.add(name);
+    
     try {
+      console.log(`[CloudVars] Sending to server: ${projectID}/${name} = ${value}`);
+      
       const response = await fetch(`${SERVER_URL}/api/cloud`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ projectID, name, value })
+        body: JSON.stringify({ projectID, name, value: String(value) })
       });
       
       const data = await response.json();
       if (data.success) {
+        // CRITICAL FIX: Only update lastValues after server confirms
         lastValues[name] = { value: data.newValue };
-        console.log(`[CloudVars] Sent to server: ${projectID}/${name} = ${value}`);
+        console.log(`[CloudVars] Server confirmed: ${projectID}/${name} = ${data.newValue}`);
       } else {
         console.log(`[CloudVars] Update rejected for ${projectID}/${name}: ${data.error}`);
         const cloudVar = getCloudVariables().find(v => v.name === name);
@@ -107,18 +144,24 @@
       }
     } catch (error) {
       console.error(`[CloudVars] Failed to send ${projectID}/${name} to server:`, error);
+    } finally {
+      pendingUpdates.delete(name);
     }
   }
   
   // Poll server for remote changes
   async function pollServerForUpdates() {
     if (!isInitialized) return;
+    
     try {
       const response = await fetch(`${SERVER_URL}/api/cloud/all?projectID=${projectID}`);
       const data = await response.json();
       
       if (data.success) {
         for (const [name, { value }] of Object.entries(data.variables)) {
+          // Skip if we're currently updating this variable
+          if (pendingUpdates.has(name)) continue;
+          
           if (lastValues[name] && value !== lastValues[name].value) {
             console.log(`[CloudVars] Server ${projectID}/${name} changed: ${lastValues[name].value} -> ${value}`);
             const cloudVar = getCloudVariables().find(v => v.name === name);
@@ -143,17 +186,20 @@
     }
     
     for (const { name, value } of cloudVars) {
+      // Skip if we're currently updating this variable
+      if (pendingUpdates.has(name)) continue;
+      
       if (!lastValues[name]) {
         // New cloud variable detected
         lastValues[name] = { value };
         if (isInitialized) {
           console.log(`[CloudVars] New cloud variable detected: ${projectID}/${name} = ${value}`);
-          sendToServer(name, value);
+          debounceUpdate(name, value);
         }
       } else if (isInitialized && value !== lastValues[name].value) {
         console.log(`[CloudVars] ${projectID}/${name} changed locally: ${lastValues[name].value} -> ${value}`);
-        sendToServer(name, value);
-        lastValues[name].value = value; // Update locally immediately
+        // CRITICAL FIX: Don't update lastValues here - wait for server confirmation
+        debounceUpdate(name, value);
       }
     }
   }
@@ -162,16 +208,20 @@
   console.log(`[CloudVars] Starting cloud variables system for project ${projectID}...`);
   initializeFromServer();
   
-  // Monitor local changes every 500ms
-  const monitorInterval = setInterval(monitor, 500);
+  // Monitor local changes every 200ms (more responsive)
+  const monitorInterval = setInterval(monitor, 200);
   
-  // Poll server for remote changes every 500ms
-  const pollInterval = setInterval(pollServerForUpdates, 500);
+  // Poll server for remote changes every 1000ms (less aggressive)
+  const pollInterval = setInterval(pollServerForUpdates, 1000);
   
   // Cleanup function
   window.cloudVarsStop = () => {
     clearInterval(monitorInterval);
     clearInterval(pollInterval);
+    // Clear any pending timeouts
+    updateQueue.forEach(({ timeout }) => clearTimeout(timeout));
+    updateQueue.clear();
+    pendingUpdates.clear();
     console.log('[CloudVars] Stopped monitoring');
   };
   
