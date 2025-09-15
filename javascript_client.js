@@ -1,4 +1,3 @@
-// Cloud Variables Bookmarklet Client - FIXED VERSION
 (function() {
   const SERVER_URL = 'https://alternativescratchcloud-production.up.railway.app';
   
@@ -34,7 +33,7 @@
     return;
   }
   
-  // Find all cloud variables (starting with 'Cloud')
+  // Helper: get all cloud variables (starting with 'Cloud')
   function getCloudVariables() {
     return Object.values(stage.variables)
       .filter(v => v.name.startsWith('Cloud'))
@@ -43,61 +42,52 @@
   
   let cloudVars = getCloudVariables();
   if (!cloudVars.length) {
-    console.error('[CloudVars] No variables starting with "Cloud" found! Create at least one.');
+    console.error('[CloudVars] No variables starting with "Cloud" found!');
     return;
   }
   
-  // Track last known values and pending updates
-  let lastValues = Object.fromEntries(cloudVars.map(v => [v.name, { value: v.value }]));
-  let pendingUpdates = new Set(); // Track variables currently being updated
+  // Track last known values & timestamps
+  let lastValues = Object.fromEntries(cloudVars.map(v => [v.name, { value: v.value, timestamp: 0 }]));
+  let pendingUpdates = new Set();
   let isInitialized = false;
-  let updateQueue = new Map(); // Queue updates to prevent spam
+  let updateQueue = new Map();
   
-  // Debounced update function
+  // Debounce function
   function debounceUpdate(name, value) {
-    if (updateQueue.has(name)) {
-      clearTimeout(updateQueue.get(name).timeout);
-    }
-    
+    if (updateQueue.has(name)) clearTimeout(updateQueue.get(name).timeout);
     const timeout = setTimeout(() => {
-      if (!pendingUpdates.has(name)) {
-        sendToServer(name, value);
-      }
+      if (!pendingUpdates.has(name)) sendToServer(name, value);
       updateQueue.delete(name);
-    }, 100); // 100ms debounce
-    
+    }, 100);
     updateQueue.set(name, { value, timeout });
   }
   
-  // Initialize by sending Scratch's cloud variables to server
+  // Initialize: send current Scratch values to server
   async function initializeFromServer() {
     try {
       for (const { name, value } of cloudVars) {
         pendingUpdates.add(name);
-        
         const response = await fetch(`${SERVER_URL}/api/cloud`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ projectID, name, value })
         });
-        
         const data = await response.json();
         if (data.success) {
-          lastValues[name] = { value: data.newValue };
-          console.log(`[CloudVars] Initialized server with ${projectID}/${name}: ${data.newValue}`);
+          lastValues[name] = { value: data.newValue, timestamp: data.lastModified || Date.now() };
+          console.log(`[CloudVars] Initialized server: ${name} = ${data.newValue}`);
         } else {
-          console.log(`[CloudVars] Server rejected initialization for ${projectID}/${name}: ${data.error}`);
-          const cloudVar = cloudVars.find(v => v.name === name);
-          if (cloudVar && data.serverValue) {
+          console.warn(`[CloudVars] Server rejected init: ${name}`, data.error);
+          if (data.serverValue) {
+            const cloudVar = cloudVars.find(v => v.name === name);
             vm.setVariableValue(stage.id, cloudVar.id, data.serverValue);
-            lastValues[name] = { value: data.serverValue };
+            lastValues[name] = { value: data.serverValue, timestamp: Date.now() };
           }
         }
-        
         pendingUpdates.delete(name);
       }
-    } catch (error) {
-      console.error(`[CloudVars] Failed to initialize to server for project ${projectID}:`, error);
+    } catch (e) {
+      console.error('[CloudVars] Initialization failed:', e);
       pendingUpdates.clear();
     }
     isInitialized = true;
@@ -105,99 +95,73 @@
   
   // Send value to server
   async function sendToServer(name, value) {
-    if (pendingUpdates.has(name)) {
-      console.log(`[CloudVars] Skipping ${name} - update already in progress`);
-      return;
-    }
-    
+    if (pendingUpdates.has(name)) return;
     pendingUpdates.add(name);
     
     try {
-      console.log(`[CloudVars] Sending to server: ${projectID}/${name} = ${value}`);
-      
       const response = await fetch(`${SERVER_URL}/api/cloud`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ projectID, name, value: String(value) })
       });
-      
       const data = await response.json();
       if (data.success) {
-        lastValues[name] = { value: data.newValue };
-        console.log(`[CloudVars] Server confirmed: ${projectID}/${name} = ${data.newValue}`);
+        lastValues[name] = { value: data.newValue, timestamp: data.lastModified || Date.now() };
+        console.log(`[CloudVars] Server confirmed: ${name} = ${data.newValue}`);
       } else {
-        console.log(`[CloudVars] Update rejected for ${projectID}/${name}: ${data.error}`);
-        const cloudVar = getCloudVariables().find(v => v.name === name);
-        if (cloudVar && data.serverValue) {
+        console.warn(`[CloudVars] Update rejected: ${name}`, data.error);
+        if (data.serverValue) {
+          const cloudVar = getCloudVariables().find(v => v.name === name);
           vm.setVariableValue(stage.id, cloudVar.id, data.serverValue);
-          lastValues[name] = { value: data.serverValue };
+          lastValues[name] = { value: data.serverValue, timestamp: Date.now() };
         }
       }
-    } catch (error) {
-      console.error(`[CloudVars] Failed to send ${projectID}/${name} to server:`, error);
+    } catch (e) {
+      console.error(`[CloudVars] Failed to send ${name}:`, e);
     } finally {
       pendingUpdates.delete(name);
     }
   }
   
-  // ✅ Monitor for local changes (patched)
+  // Monitor local changes
   function monitor() {
     cloudVars = getCloudVariables();
-    if (!cloudVars.length) {
-      console.error('[CloudVars] No cloud variables found!');
-      return;
-    }
-    
     for (const { name, value } of cloudVars) {
       if (pendingUpdates.has(name)) continue;
-
       if (!lastValues[name]) {
-        lastValues[name] = { value };
-        if (isInitialized) {
-          console.log(`[CloudVars] New cloud variable detected: ${projectID}/${name} = ${value}`);
-          debounceUpdate(name, value);
-        }
+        lastValues[name] = { value, timestamp: 0 };
+        if (isInitialized) debounceUpdate(name, value);
       } else if (isInitialized && value !== lastValues[name].value) {
-        console.log(`[CloudVars] ${projectID}/${name} changed locally: ${lastValues[name].value} -> ${value}`);
-
-        // Tentatively update immediately
-        lastValues[name] = { value };
-
-        // Then send update
         debounceUpdate(name, value);
       }
     }
   }
   
-  // ✅ Poll server for remote changes (patched)
+  // Poll server for remote changes
   async function pollServerForUpdates() {
     if (!isInitialized) return;
-    
     try {
       const response = await fetch(`${SERVER_URL}/api/cloud/all?projectID=${projectID}`);
       const data = await response.json();
-      
-      if (data.success) {
-        for (const [name, { value }] of Object.entries(data.variables)) {
-          if (pendingUpdates.has(name)) continue;
-          
+      if (!data.success) return;
+      for (const [name, serverVar] of Object.entries(data.variables)) {
+        const serverTime = new Date(serverVar.lastModified || Date.now());
+        if (!lastValues[name] || serverTime > new Date(lastValues[name].timestamp)) {
           const cloudVar = getCloudVariables().find(v => v.name === name);
-          if (cloudVar && cloudVar.value !== value) {
-            console.log(`[CloudVars] Server ${projectID}/${name} changed: ${cloudVar.value} -> ${value}`);
-            vm.setVariableValue(stage.id, cloudVar.id, value);
-            lastValues[name] = { value };
+          if (cloudVar) {
+            vm.setVariableValue(stage.id, cloudVar.id, serverVar.value);
+            lastValues[name] = { value: serverVar.value, timestamp: serverTime };
+            console.log(`[CloudVars] Server update applied: ${name} = ${serverVar.value}`);
           }
         }
       }
-    } catch (error) {
-      console.error(`[CloudVars] Failed to poll server for project ${projectID}:`, error);
+    } catch (e) {
+      console.error('[CloudVars] Polling failed:', e);
     }
   }
   
-  // Start the system
-  console.log(`[CloudVars] Starting cloud variables system for project ${projectID}...`);
+  console.log('[CloudVars] Starting timestamp-aware cloud system...');
   initializeFromServer();
-  
   const monitorInterval = setInterval(monitor, 200);
   const pollInterval = setInterval(pollServerForUpdates, 1000);
   
@@ -208,8 +172,6 @@
     updateQueue.forEach(({ timeout }) => clearTimeout(timeout));
     updateQueue.clear();
     pendingUpdates.clear();
-    console.log('[CloudVars] Stopped monitoring');
+    console.log('[CloudVars] Monitoring stopped');
   };
-  
-  console.log(`[CloudVars] Cloud variables active for project ${projectID}! Call cloudVarsStop() to stop.`);
 })();
