@@ -101,16 +101,7 @@ def update_cloud_variable():
         if name not in cloud_variables[projectID]:
             cloud_variables[projectID][name] = {'value': '0', 'timestamp': int(datetime.now().timestamp() * 1000)}
         
-        # Check timestamp to avoid overwriting newer updates
-        client_timestamp = data.get('timestamp', 0)
-        if client_timestamp < cloud_variables[projectID][name]['timestamp']:
-            return jsonify({
-                'success': False,
-                'error': 'Update rejected: Server has newer value',
-                'serverValue': cloud_variables[projectID][name]['value'],
-                'serverTimestamp': cloud_variables[projectID][name]['timestamp']
-            }), 409
-        
+        # No timestamp validation - last write wins
         old_value = cloud_variables[projectID][name]['value']
         cloud_variables[projectID][name]['value'] = str(data['value'])  # Convert to string like Scratch variables
         cloud_variables[projectID][name]['timestamp'] = int(datetime.now().timestamp() * 1000)
