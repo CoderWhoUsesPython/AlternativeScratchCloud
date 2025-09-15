@@ -1,6 +1,6 @@
 // Cloud Variables Bookmarklet Client
 (function() {
-  const SERVER_URL = 'alternativescratchcloud-production.up.railway.app'; // Your local Flask server
+  const SERVER_URL = 'https://alternativescratchcloud-production.up.railway.app'; // Your local Flask server
   
   // Extract projectID from Scratch URL
   let projectID;
@@ -177,4 +177,3 @@
   
   console.log(`[CloudVars] Cloud variables active for project ${projectID}! Call cloudVarsStop() to stop.`);
 })();
-
