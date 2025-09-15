@@ -48,7 +48,7 @@
   }
   
   // Track last known values and timestamps
-  let lastValues = Object.fromEntries(cloudVars.map(v => [v.name, { value: v.value, timestamp: 0 }]));
+  let lastValues = Object.fromEntries(cloudVars.map(v => [v.name, { value: v.value, timestamp: Date.now() }]));
   let isInitialized = false;
   
   // Initialize by sending Scratch's cloud variables to server
@@ -177,4 +177,3 @@
   
   console.log(`[CloudVars] Cloud variables active for project ${projectID}! Call cloudVarsStop() to stop.`);
 })();
-
