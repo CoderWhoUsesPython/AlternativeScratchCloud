@@ -1,6 +1,6 @@
 // Cloud Variables Bookmarklet Client
 (function() {
-  const SERVER_URL = 'https://alternativescratchcloud-production.up.railway.app'; // Your Flask server
+  const SERVER_URL = 'http://localhost:3000'; // Your local Flask server
   
   // Extract projectID from Scratch URL
   let projectID;
@@ -48,36 +48,36 @@
   }
   
   // Track last known values
-  let lastValues = Object.fromEntries(cloudVars.map(v => [v.name, v.value]));
+  let lastValues = Object.fromEntries(cloudVars.map(v => [v.name, { value: v.value }]));
   let isInitialized = false;
   
-  // Initialize by fetching server values and sending current Scratch values
+  // Initialize by sending Scratch's cloud variables to server
   async function initializeFromServer() {
     try {
-      // First, fetch all current server values
-      const response = await fetch(`${SERVER_URL}/api/cloud/all?projectID=${projectID}`);
-      const data = await response.json();
-      
-      if (data.success && data.variables) {
-        // Update Scratch with server values
-        for (const [name, { value }] of Object.entries(data.variables)) {
+      for (const { name, value } of cloudVars) {
+        const response = await fetch(`${SERVER_URL}/api/cloud`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ projectID, name, value })
+        });
+        
+        const data = await response.json();
+        if (data.success) {
+          lastValues[name] = { value: data.newValue };
+          console.log(`[CloudVars] Initialized server with ${projectID}/${name}: ${data.newValue}`);
+        } else {
+          console.log(`[CloudVars] Server rejected initialization for ${projectID}/${name}: ${data.error}`);
           const cloudVar = cloudVars.find(v => v.name === name);
-          if (cloudVar && value !== cloudVar.value) {
-            console.log(`[CloudVars] Setting ${projectID}/${name} from server: ${value}`);
-            vm.setVariableValue(stage.id, cloudVar.id, value);
-            lastValues[name] = value;
+          if (cloudVar && data.serverValue) {
+            vm.setVariableValue(stage.id, cloudVar.id, data.serverValue);
+            lastValues[name] = { value: data.serverValue };
           }
         }
       }
-      
-      // Then send current Scratch values to server
-      for (const { name, value } of cloudVars) {
-        if (!data.variables || !data.variables[name]) {
-          await sendToServer(name, value);
-        }
-      }
     } catch (error) {
-      console.error(`[CloudVars] Failed to initialize from server for project ${projectID}:`, error);
+      console.error(`[CloudVars] Failed to initialize to server for project ${projectID}:`, error);
     }
     isInitialized = true;
   }
@@ -95,10 +95,15 @@
       
       const data = await response.json();
       if (data.success) {
-        lastValues[name] = data.newValue;
+        lastValues[name] = { value: data.newValue };
         console.log(`[CloudVars] Sent to server: ${projectID}/${name} = ${value}`);
       } else {
-        console.error(`[CloudVars] Failed to send ${projectID}/${name}:`, data.error);
+        console.log(`[CloudVars] Update rejected for ${projectID}/${name}: ${data.error}`);
+        const cloudVar = getCloudVariables().find(v => v.name === name);
+        if (cloudVar && data.serverValue) {
+          vm.setVariableValue(stage.id, cloudVar.id, data.serverValue);
+          lastValues[name] = { value: data.serverValue };
+        }
       }
     } catch (error) {
       console.error(`[CloudVars] Failed to send ${projectID}/${name} to server:`, error);
@@ -114,12 +119,12 @@
       
       if (data.success) {
         for (const [name, { value }] of Object.entries(data.variables)) {
-          if (lastValues[name] && value !== lastValues[name]) {
-            console.log(`[CloudVars] Server ${projectID}/${name} changed: ${lastValues[name]} -> ${value}`);
+          if (lastValues[name] && value !== lastValues[name].value) {
+            console.log(`[CloudVars] Server ${projectID}/${name} changed: ${lastValues[name].value} -> ${value}`);
             const cloudVar = getCloudVariables().find(v => v.name === name);
             if (cloudVar) {
               vm.setVariableValue(stage.id, cloudVar.id, value);
-              lastValues[name] = value;
+              lastValues[name] = { value };
             }
           }
         }
@@ -138,17 +143,17 @@
     }
     
     for (const { name, value } of cloudVars) {
-      if (!lastValues.hasOwnProperty(name)) {
+      if (!lastValues[name]) {
         // New cloud variable detected
-        lastValues[name] = value;
+        lastValues[name] = { value };
         if (isInitialized) {
           console.log(`[CloudVars] New cloud variable detected: ${projectID}/${name} = ${value}`);
           sendToServer(name, value);
         }
-      } else if (isInitialized && value !== lastValues[name]) {
-        console.log(`[CloudVars] ${projectID}/${name} changed locally: ${lastValues[name]} -> ${value}`);
+      } else if (isInitialized && value !== lastValues[name].value) {
+        console.log(`[CloudVars] ${projectID}/${name} changed locally: ${lastValues[name].value} -> ${value}`);
         sendToServer(name, value);
-        lastValues[name] = value; // Update locally immediately
+        lastValues[name].value = value; // Update locally immediately
       }
     }
   }
