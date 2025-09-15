@@ -1,7 +1,6 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import os
-from datetime import datetime
 import time
 
 app = Flask(__name__)
@@ -11,7 +10,7 @@ CORS(app, origins='*', methods=['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
      allow_headers=['Content-Type', 'Authorization'])
 
 # In-memory storage for cloud variables by projectID
-cloud_variables = {}  # Format: {projectID: {variable_name: {"value": "0", "timestamp": <ms>}, ...}}
+cloud_variables = {}  # Format: {projectID: {variable_name: {"value": "0"}, ...}}
 start_time = time.time()  # Track server start time for uptime
 
 @app.route('/')
@@ -44,15 +43,14 @@ def get_cloud_variable():
     if projectID not in cloud_variables:
         cloud_variables[projectID] = {}
     if name not in cloud_variables[projectID]:
-        cloud_variables[projectID][name] = {'value': '0', 'timestamp': int(datetime.now().timestamp() * 1000)}
+        cloud_variables[projectID][name] = {'value': '0'}
     
     print(f"[GET] {projectID}/{name} requested: {cloud_variables[projectID][name]['value']}")
     return jsonify({
         'success': True,
         'projectID': projectID,
         'name': name,
-        'value': cloud_variables[projectID][name]['value'],
-        'timestamp': cloud_variables[projectID][name]['timestamp']
+        'value': cloud_variables[projectID][name]['value']
     })
 
 @app.route('/api/cloud/all', methods=['GET'])
@@ -99,12 +97,10 @@ def update_cloud_variable():
         if projectID not in cloud_variables:
             cloud_variables[projectID] = {}
         if name not in cloud_variables[projectID]:
-            cloud_variables[projectID][name] = {'value': '0', 'timestamp': int(datetime.now().timestamp() * 1000)}
+            cloud_variables[projectID][name] = {'value': '0'}
         
-        # No timestamp validation - last write wins
         old_value = cloud_variables[projectID][name]['value']
         cloud_variables[projectID][name]['value'] = str(data['value'])  # Convert to string like Scratch variables
-        cloud_variables[projectID][name]['timestamp'] = int(datetime.now().timestamp() * 1000)
         
         print(f"[POST] {projectID}/{name} updated: {old_value} -> {cloud_variables[projectID][name]['value']}")
         
@@ -113,8 +109,7 @@ def update_cloud_variable():
             'projectID': projectID,
             'name': name,
             'oldValue': old_value,
-            'newValue': cloud_variables[projectID][name]['value'],
-            'timestamp': cloud_variables[projectID][name]['timestamp']
+            'newValue': cloud_variables[projectID][name]['value']
         })
     except Exception as e:
         return jsonify({
