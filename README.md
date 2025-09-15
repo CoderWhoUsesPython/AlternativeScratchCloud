@@ -1,6 +1,6 @@
 # 🌥️ Scratch Cloud Variables Server
 
-This Flask server provides a simple API to store and retrieve a single cloud variable (`CloudTest`). Useful for lightweight cloud state management in Scratch-like environments.
+This Flask server provides a simple API to store and retrieve multiple variables that start with Cloud, ex. (CloudScore, CloudSomething, etc).
 
 ---
 
@@ -9,7 +9,7 @@ This Flask server provides a simple API to store and retrieve a single cloud var
 ### 1. Install dependencies
 
 ```bash
-pip install flask flask-cors
+pip install Flask Flask-CORS
 ```
 ### 2. Run the server
 
@@ -17,4 +17,4 @@ pip install flask flask-cors
 python app.py
 ```
 
-### 3. Invoke the JavaScript script while on a Scratch project.
+### 3. Invoke the JavaScript script while on a Scratch project. Make sure to change the SERVER_URL variable to your server domain like localhost.
