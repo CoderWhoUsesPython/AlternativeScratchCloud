@@ -1,6 +1,6 @@
 (function() {
   const SERVER_URL = 'https://alternativescratchcloud-production.up.railway.app';
-  
+
   // Extract projectID from Scratch URL
   let projectID;
   try {
@@ -13,7 +13,7 @@
     console.error('[CloudVars] Failed to extract projectID:', error);
     return;
   }
-  
+
   // Get Scratch VM
   let vm;
   try {
@@ -25,33 +25,33 @@
     console.error('[CloudVars] Failed to access Scratch VM:', error);
     return;
   }
-  
+
   // Get stage
   const stage = vm.runtime.targets.find(t => t.isStage);
   if (!stage) {
     console.error('[CloudVars] Stage not found!');
     return;
   }
-  
+
   // Helper: get all cloud variables (starting with 'Cloud')
   function getCloudVariables() {
     return Object.values(stage.variables)
       .filter(v => v.name.startsWith('Cloud'))
       .map(v => ({ id: v.id, name: v.name, value: v.value }));
   }
-  
+
   let cloudVars = getCloudVariables();
   if (!cloudVars.length) {
     console.error('[CloudVars] No variables starting with "Cloud" found!');
     return;
   }
-  
+
   // Track last known values & timestamps
   let lastValues = Object.fromEntries(cloudVars.map(v => [v.name, { value: v.value, timestamp: 0 }]));
   let pendingUpdates = new Set();
   let isInitialized = false;
   let updateQueue = new Map();
-  
+
   // Debounce function
   function debounceUpdate(name, value) {
     if (updateQueue.has(name)) clearTimeout(updateQueue.get(name).timeout);
@@ -61,43 +61,12 @@
     }, 100);
     updateQueue.set(name, { value, timeout });
   }
-  
-  // Initialize: send current Scratch values to server
-  async function initializeFromServer() {
-    try {
-      for (const { name, value } of cloudVars) {
-        pendingUpdates.add(name);
-        const response = await fetch(`${SERVER_URL}/api/cloud`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ projectID, name, value })
-        });
-        const data = await response.json();
-        if (data.success) {
-          lastValues[name] = { value: data.newValue, timestamp: data.lastModified || Date.now() };
-          console.log(`[CloudVars] Initialized server: ${name} = ${data.newValue}`);
-        } else {
-          console.warn(`[CloudVars] Server rejected init: ${name}`, data.error);
-          if (data.serverValue) {
-            const cloudVar = cloudVars.find(v => v.name === name);
-            vm.setVariableValue(stage.id, cloudVar.id, data.serverValue);
-            lastValues[name] = { value: data.serverValue, timestamp: Date.now() };
-          }
-        }
-        pendingUpdates.delete(name);
-      }
-    } catch (e) {
-      console.error('[CloudVars] Initialization failed:', e);
-      pendingUpdates.clear();
-    }
-    isInitialized = true;
-  }
-  
+
   // Send value to server
   async function sendToServer(name, value) {
     if (pendingUpdates.has(name)) return;
     pendingUpdates.add(name);
-    
+
     try {
       const response = await fetch(`${SERVER_URL}/api/cloud`, {
         method: 'POST',
@@ -106,7 +75,7 @@
       });
       const data = await response.json();
       if (data.success) {
-        lastValues[name] = { value: data.newValue, timestamp: data.lastModified || Date.now() };
+        lastValues[name] = { value: data.newValue, timestamp: new Date(data.lastModified) };
         console.log(`[CloudVars] Server confirmed: ${name} = ${data.newValue}`);
       } else {
         console.warn(`[CloudVars] Update rejected: ${name}`, data.error);
@@ -122,7 +91,35 @@
       pendingUpdates.delete(name);
     }
   }
-  
+
+  // One-time initialization: set VM to server values, ignoring timestamps
+  async function initializeFromServer() {
+    try {
+      const response = await fetch(`${SERVER_URL}/api/cloud/all?projectID=${projectID}`);
+      const data = await response.json();
+      if (!data.success) throw new Error('Failed to get server variables');
+
+      cloudVars = getCloudVariables();
+
+      for (const { name, id } of cloudVars) {
+        const serverVar = data.variables[name];
+        if (serverVar) {
+          // Force VM to server value
+          vm.setVariableValue(stage.id, id, serverVar.value);
+          lastValues[name] = { value: serverVar.value, timestamp: new Date(serverVar.lastModified) };
+          console.log(`[CloudVars] Initialized ${name} to server value: ${serverVar.value}`);
+        } else {
+          // Server has no value yet → send current VM value
+          const value = stage.variables[id].value;
+          await sendToServer(name, value);
+        }
+      }
+    } catch (e) {
+      console.error('[CloudVars] Initialization failed:', e);
+    }
+    isInitialized = true;
+  }
+
   // Monitor local changes
   function monitor() {
     cloudVars = getCloudVariables();
@@ -136,17 +133,18 @@
       }
     }
   }
-  
-  // Poll server for remote changes
+
+  // Poll server for remote changes (timestamp-aware)
   async function pollServerForUpdates() {
     if (!isInitialized) return;
     try {
       const response = await fetch(`${SERVER_URL}/api/cloud/all?projectID=${projectID}`);
       const data = await response.json();
       if (!data.success) return;
+
       for (const [name, serverVar] of Object.entries(data.variables)) {
         const serverTime = new Date(serverVar.lastModified || Date.now());
-        if (!lastValues[name] || serverTime > new Date(lastValues[name].timestamp)) {
+        if (!lastValues[name] || serverTime >= new Date(lastValues[name].timestamp)) {
           const cloudVar = getCloudVariables().find(v => v.name === name);
           if (cloudVar) {
             vm.setVariableValue(stage.id, cloudVar.id, serverVar.value);
@@ -159,12 +157,13 @@
       console.error('[CloudVars] Polling failed:', e);
     }
   }
-  
+
   console.log('[CloudVars] Starting timestamp-aware cloud system...');
   initializeFromServer();
-  const monitorInterval = setInterval(monitor, 200);
-  const pollInterval = setInterval(pollServerForUpdates, 1000);
-  
+
+  const monitorInterval = setInterval(monitor, 200);   // local changes
+  const pollInterval = setInterval(pollServerForUpdates, 1000); // server polling
+
   // Cleanup function
   window.cloudVarsStop = () => {
     clearInterval(monitorInterval);
