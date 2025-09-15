@@ -55,12 +55,10 @@
   
   // Debounced update function
   function debounceUpdate(name, value) {
-    // Clear existing timeout for this variable
     if (updateQueue.has(name)) {
       clearTimeout(updateQueue.get(name).timeout);
     }
     
-    // Set new timeout
     const timeout = setTimeout(() => {
       if (!pendingUpdates.has(name)) {
         sendToServer(name, value);
@@ -79,9 +77,7 @@
         
         const response = await fetch(`${SERVER_URL}/api/cloud`, {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ projectID, name, value })
         });
         
@@ -102,7 +98,6 @@
       }
     } catch (error) {
       console.error(`[CloudVars] Failed to initialize to server for project ${projectID}:`, error);
-      // Clear all pending updates on error
       pendingUpdates.clear();
     }
     isInitialized = true;
@@ -110,7 +105,6 @@
   
   // Send value to server
   async function sendToServer(name, value) {
-    // Prevent concurrent updates to same variable
     if (pendingUpdates.has(name)) {
       console.log(`[CloudVars] Skipping ${name} - update already in progress`);
       return;
@@ -123,15 +117,12 @@
       
       const response = await fetch(`${SERVER_URL}/api/cloud`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ projectID, name, value: String(value) })
       });
       
       const data = await response.json();
       if (data.success) {
-        // CRITICAL FIX: Only update lastValues after server confirms
         lastValues[name] = { value: data.newValue };
         console.log(`[CloudVars] Server confirmed: ${projectID}/${name} = ${data.newValue}`);
       } else {
@@ -149,7 +140,36 @@
     }
   }
   
-  // Poll server for remote changes
+  // ✅ Monitor for local changes (patched)
+  function monitor() {
+    cloudVars = getCloudVariables();
+    if (!cloudVars.length) {
+      console.error('[CloudVars] No cloud variables found!');
+      return;
+    }
+    
+    for (const { name, value } of cloudVars) {
+      if (pendingUpdates.has(name)) continue;
+
+      if (!lastValues[name]) {
+        lastValues[name] = { value };
+        if (isInitialized) {
+          console.log(`[CloudVars] New cloud variable detected: ${projectID}/${name} = ${value}`);
+          debounceUpdate(name, value);
+        }
+      } else if (isInitialized && value !== lastValues[name].value) {
+        console.log(`[CloudVars] ${projectID}/${name} changed locally: ${lastValues[name].value} -> ${value}`);
+
+        // Tentatively update immediately
+        lastValues[name] = { value };
+
+        // Then send update
+        debounceUpdate(name, value);
+      }
+    }
+  }
+  
+  // ✅ Poll server for remote changes (patched)
   async function pollServerForUpdates() {
     if (!isInitialized) return;
     
@@ -159,16 +179,13 @@
       
       if (data.success) {
         for (const [name, { value }] of Object.entries(data.variables)) {
-          // Skip if we're currently updating this variable
           if (pendingUpdates.has(name)) continue;
           
-          if (lastValues[name] && value !== lastValues[name].value) {
-            console.log(`[CloudVars] Server ${projectID}/${name} changed: ${lastValues[name].value} -> ${value}`);
-            const cloudVar = getCloudVariables().find(v => v.name === name);
-            if (cloudVar) {
-              vm.setVariableValue(stage.id, cloudVar.id, value);
-              lastValues[name] = { value };
-            }
+          const cloudVar = getCloudVariables().find(v => v.name === name);
+          if (cloudVar && cloudVar.value !== value) {
+            console.log(`[CloudVars] Server ${projectID}/${name} changed: ${cloudVar.value} -> ${value}`);
+            vm.setVariableValue(stage.id, cloudVar.id, value);
+            lastValues[name] = { value };
           }
         }
       }
@@ -177,48 +194,17 @@
     }
   }
   
-  // Monitor for local changes
-  function monitor() {
-    cloudVars = getCloudVariables();
-    if (!cloudVars.length) {
-      console.error('[CloudVars] No cloud variables found!');
-      return;
-    }
-    
-    for (const { name, value } of cloudVars) {
-      // Skip if we're currently updating this variable
-      if (pendingUpdates.has(name)) continue;
-      
-      if (!lastValues[name]) {
-        // New cloud variable detected
-        lastValues[name] = { value };
-        if (isInitialized) {
-          console.log(`[CloudVars] New cloud variable detected: ${projectID}/${name} = ${value}`);
-          debounceUpdate(name, value);
-        }
-      } else if (isInitialized && value !== lastValues[name].value) {
-        console.log(`[CloudVars] ${projectID}/${name} changed locally: ${lastValues[name].value} -> ${value}`);
-        // CRITICAL FIX: Don't update lastValues here - wait for server confirmation
-        debounceUpdate(name, value);
-      }
-    }
-  }
-  
   // Start the system
   console.log(`[CloudVars] Starting cloud variables system for project ${projectID}...`);
   initializeFromServer();
   
-  // Monitor local changes every 200ms (more responsive)
   const monitorInterval = setInterval(monitor, 200);
-  
-  // Poll server for remote changes every 1000ms (less aggressive)
   const pollInterval = setInterval(pollServerForUpdates, 1000);
   
   // Cleanup function
   window.cloudVarsStop = () => {
     clearInterval(monitorInterval);
     clearInterval(pollInterval);
-    // Clear any pending timeouts
     updateQueue.forEach(({ timeout }) => clearTimeout(timeout));
     updateQueue.clear();
     pendingUpdates.clear();
